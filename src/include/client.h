@@ -112,20 +112,66 @@ void Decide() {
     }
   }
 
-  // 2) Heuristic guess: choose cell with minimal naive risk from adjacent equations
+  // 2) Subset-based deduction between neighboring numbers (a light Baseline2-style rule)
+  struct NumInfo { int r, c, k, need; std::vector<std::pair<int,int>> unk; };
+  std::vector<NumInfo> nums;
+  nums.reserve(rows * columns);
+  for (int r = 0; r < rows; ++r) {
+    for (int c = 0; c < columns; ++c) {
+      char ch = observed_map[r][c];
+      if (ch >= '0' && ch <= '8') {
+        int k = ch - '0';
+        int marked_cnt = 0;
+        std::vector<std::pair<int,int>> unk;
+        for (int d = 0; d < 8; ++d) {
+          int nr = r + dr8[d], nc = c + dc8[d];
+          if (!inb(nr, nc)) continue;
+          if (observed_map[nr][nc] == '@') ++marked_cnt;
+          else if (observed_map[nr][nc] == '?') unk.emplace_back(nr, nc);
+        }
+        int need = k - marked_cnt;
+        if (need < 0) need = 0;
+        if (!unk.empty()) nums.push_back({r, c, k, need, unk});
+      }
+    }
+  }
+  auto is_in = [](const std::vector<std::pair<int,int>>& v, int rr, int cc){
+    for (auto &p: v) if (p.first==rr && p.second==cc) return true; return false;
+  };
+  for (size_t i = 0; i < nums.size(); ++i) {
+    for (size_t j = 0; j < nums.size(); ++j) if (i != j) {
+      const auto &A = nums[i];
+      const auto &B = nums[j];
+      // Check if B.unk is subset of A.unk
+      bool subset_BA = true;
+      for (auto &p : B.unk) if (!is_in(A.unk, p.first, p.second)) { subset_BA = false; break; }
+      if (subset_BA && A.unk.size() > B.unk.size()) {
+        int needA = A.need, needB = B.need;
+        int diff_size = (int)A.unk.size() - (int)B.unk.size();
+        // Case 1: same need -> A\B are all safe
+        if (needA == needB) {
+          for (auto &p : A.unk) if (!is_in(B.unk, p.first, p.second)) { Execute(p.first, p.second, 0); return; }
+        }
+        // Case 2: difference equals diff_size -> A\B are all mines
+        if (needA - needB == diff_size) {
+          for (auto &p : A.unk) if (!is_in(B.unk, p.first, p.second)) { Execute(p.first, p.second, 1); return; }
+        }
+      }
+    }
+  }
+
+  // 3) Heuristic guess: choose cell with minimal naive risk from adjacent equations
   double best_risk = std::numeric_limits<double>::infinity();
   int best_r = -1, best_c = -1;
   for (int r = 0; r < rows; ++r) {
     for (int c = 0; c < columns; ++c) {
       if (observed_map[r][c] != '?') continue;
       double risk = 0.0;
-      bool constrained = false;
       for (int d = 0; d < 8; ++d) {
         int nr = r + dr8[d], nc = c + dc8[d];
         if (!inb(nr, nc)) continue;
         char ch = observed_map[nr][nc];
         if (ch >= '0' && ch <= '8') {
-          constrained = true;
           int k = ch - '0';
           int marked_cnt = 0, unknown_cnt = 0;
           for (int d2 = 0; d2 < 8; ++d2) {
@@ -134,21 +180,14 @@ void Decide() {
             if (observed_map[ar][ac] == '@') ++marked_cnt;
             else if (observed_map[ar][ac] == '?') ++unknown_cnt;
           }
-          int need = k - marked_cnt;
-          if (need < 0) need = 0;
+          int need = k - marked_cnt; if (need < 0) need = 0;
           if (unknown_cnt > 0) risk += (double)need / (double)unknown_cnt;
         }
       }
-      if (risk < best_risk || (best_r == -1)) {
-        best_risk = risk;
-        best_r = r; best_c = c;
-      }
+      if (risk < best_risk || (best_r == -1)) { best_risk = risk; best_r = r; best_c = c; }
     }
   }
-  if (best_r != -1) {
-    Execute(best_r, best_c, 0);
-    return;
-  }
+  if (best_r != -1) { Execute(best_r, best_c, 0); return; }
 
   // Fallback (should not happen): visit (0,0)
   Execute(0, 0, 0);
